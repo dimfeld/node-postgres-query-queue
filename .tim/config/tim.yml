@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dimfeld/llmutils/main/schema/tim-config-schema.json
+
+defaultExecutor: claude-code
+postApplyCommands:
+  - title: Format code
+    command: oxfmt
+    allowFailure: true
+    hideOutputOnSuccess: true
+prCreation:
+  draft: false
+  autoCreatePr: always

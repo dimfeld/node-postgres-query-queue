@@ -1,0 +1,29 @@
+{
+  "name": "node-postgres-query-queue",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "format": "oxfmt",
+    "lint": "oxlint",
+    "dev": "tsc -w",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "postgres",
+    "pg"
+  ],
+  "author": "Daniel Imfeld <dimfeld>",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@10.33.0",
+  "dependencies": {
+    "pg": "^8 || ^9"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.46.0",
+    "oxlint": "^1.61.0",
+    "typescript": "^6.0.3"
+  }
+}
