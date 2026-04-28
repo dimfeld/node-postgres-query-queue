@@ -4,6 +4,7 @@ import type { QueueSnapshot, WrappedPoolClient, WrappedPoolOptions } from './typ
 export declare class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolClient {
     private readonly raw;
     private readonly options;
+    readonly debugClientId: number;
     private readonly pumpState;
     private readonly onFatal;
     private readonly rawEventForwarders;
@@ -47,6 +48,10 @@ export declare class WrappedPoolClientImpl extends EventEmitter implements Wrapp
     private finalizeItems;
     private deferCallbackThrow;
     private notifyStateChange;
+    private debugQueueingQuery;
+    private debugRunningQuery;
+    private clientDebugContext;
 }
 export declare function wrapClient(rawClient: PoolClient, options?: WrappedPoolOptions): WrappedPoolClient;
+export declare function getWrappedClientDebugId(client: WrappedPoolClient): number | undefined;
 //# sourceMappingURL=wrap-client.d.ts.map

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import createDebug from 'debug';
 import type { PoolClient, QueryResult } from 'pg';
 import {
   ClientBrokenError,
@@ -62,10 +63,13 @@ function asSubmittableErrorTarget(value: unknown): SubmittableErrorTarget | null
 }
 
 const FORWARDED_RAW_EVENTS = ['notice', 'notification', 'end'] as const;
+const debug = createDebug('node-postgres-query-queue:client');
+let nextDebugClientId = 1;
 
 export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolClient {
   private readonly raw: PoolClient;
   private readonly options: WrappedPoolOptions;
+  readonly debugClientId: number;
   private readonly pumpState: PumpState;
   private readonly onFatal: (error: unknown) => void;
   private readonly rawEventForwarders = new Map<string, (...args: unknown[]) => void>();
@@ -87,6 +91,8 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
     super();
     this.raw = rawClient;
     this.options = options;
+    this.debugClientId = nextDebugClientId++;
+    debug(this.debugClientId, 'wrapped client created', this.clientDebugContext());
     this.connect = bindPassthrough<PoolClient['connect']>(rawClient, 'connect');
     this.copyFrom = bindPassthrough<PoolClient['copyFrom']>(rawClient, 'copyFrom');
     this.copyTo = bindPassthrough<PoolClient['copyTo']>(rawClient, 'copyTo');
@@ -114,6 +120,7 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
 
     this.onFatal = (error: unknown) => {
       const fatalError = toError(error);
+      debug(this.debugClientId, 'fatal raw client error', fatalError);
       this.handleFatal(fatalError);
 
       if (this.listenerCount('error') > 0) {
@@ -125,6 +132,7 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
 
     for (const event of FORWARDED_RAW_EVENTS) {
       const forward = (...args: unknown[]): void => {
+        debug(this.debugClientId, 'forwarding raw event', event);
         this.emit(event, ...args);
       };
       this.rawEventForwarders.set(event, forward);
@@ -193,31 +201,45 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
     const normalized = normalizeQueryArgs(args);
 
     if (normalized.kind === 'promise') {
-      return this.enqueuePromiseItem(normalized.dispatch, normalized.description);
+      this.debugQueueingQuery(normalized.kind, normalized.description, args);
+      return this.enqueuePromiseItem(normalized.dispatch, normalized.description, args);
     }
 
     if (normalized.kind === 'callback') {
+      this.debugQueueingQuery(normalized.kind, normalized.description, args);
       return this.enqueueCallbackItem(
         normalized.dispatchArgs,
         normalized.userCallback,
         normalized.description,
+        args,
       );
     }
 
+    this.debugQueueingQuery(normalized.kind, normalized.description, args);
     return this.enqueueSubmittableItem(normalized.dispatch, normalized.description, args[0], args);
   }) as PoolClient['query'];
 
   release(err?: Error | boolean): void {
     if (this.pumpState.rawReleased || this.pumpState.releaseRequested) {
+      debug(this.debugClientId, 'double release attempted');
       throw new DoubleReleaseError();
     }
 
     this.pumpState.releaseRequested = true;
+    debug(this.debugClientId, 'release requested', {
+      withError: err !== undefined,
+      queueSize: this.pumpState.queue.length,
+      running: this.pumpState.active,
+    });
 
     if (err instanceof Error || err === true) {
       this.pumpState.releaseError = err;
       const shouldAbortQueued = this.options.abortQueuedQueriesOnReleaseError !== false;
       if (shouldAbortQueued) {
+        debug(this.debugClientId, 'aborting queued queries before release', {
+          queued: this.pumpState.queue.length,
+          active: this.pumpState.activeItem !== null,
+        });
         const releaseAborted = new ReleaseAbortedError(err);
         const queuedItems = this.pumpState.queue.drain();
         const activeItem = this.pumpState.activeItem;
@@ -262,11 +284,16 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
   private enqueuePromiseItem(
     dispatch: (raw: PoolClient) => unknown,
     description?: string,
+    queryArgs: unknown[] = [],
   ): Promise<unknown> {
+    const runArgs = [...queryArgs];
     return new Promise<unknown>((resolve, reject) => {
       const item: QueueItem = {
         kind: 'promise',
-        dispatch,
+        dispatch: (raw: PoolClient) => {
+          this.debugRunningQuery('promise', description, runArgs);
+          return dispatch(raw);
+        },
         finalize: () => {},
         ...(description !== undefined ? { description } : {}),
       };
@@ -290,12 +317,16 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
     dispatchArgs: unknown[],
     userCallback: (error: Error | null, result?: QueryResult) => void,
     description?: string,
+    queryArgs: unknown[] = [],
   ): unknown {
     let queryReturnValue: unknown;
+    const submittedArgs = [...queryArgs];
+    const runArgs = [...dispatchArgs];
 
     const item: QueueItem = {
       kind: 'callback',
       dispatch: (raw: PoolClient) => {
+        this.debugRunningQuery('callback', description, runArgs, submittedArgs);
         const wrappedCallback = (error: unknown, result?: unknown): void => {
           item.finalize(error === null ? null : toError(error), result);
         };
@@ -326,9 +357,13 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
     immediateReturnValue: unknown,
     queryArgs: unknown[],
   ): unknown {
+    const runArgs = [...queryArgs];
     const item: QueueItem = {
       kind: 'submittable',
-      dispatch,
+      dispatch: (raw: PoolClient) => {
+        this.debugRunningQuery('submittable', description, runArgs);
+        return dispatch(raw);
+      },
       finalize: () => {},
       ...(description !== undefined ? { description } : {}),
     };
@@ -359,6 +394,11 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
         return;
       }
       settled = true;
+      debug(this.debugClientId, 'query finalized', {
+        kind: item.kind,
+        description: item.description,
+        error,
+      });
 
       try {
         settle(error, result);
@@ -435,6 +475,7 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
     }
 
     this.pumpScheduled = true;
+    debug(this.debugClientId, 'pump scheduled');
     queueMicrotask(() => {
       this.pumpScheduled = false;
       this.runPump();
@@ -442,12 +483,14 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
   }
 
   private runPump(): void {
+    debug(this.debugClientId, 'pump run', this.queueSnapshot());
     pump(this.pumpState, {
       emitDrain: () => {
         if (this.options.emitDrain === false) {
           return;
         }
 
+        debug(this.debugClientId, 'drain emitted');
         this.emit('drain');
       },
       doRawRelease: (error?: Error | boolean) => {
@@ -467,6 +510,11 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
       return;
     }
 
+    debug(this.debugClientId, 'raw client release', {
+      withError: error !== undefined,
+      queueSize: this.pumpState.queue.length,
+      running: this.pumpState.active,
+    });
     this.pumpState.rawReleased = true;
     this.raw.off('error', this.onFatal);
     for (const [event, forward] of this.rawEventForwarders) {
@@ -492,6 +540,11 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
       return;
     }
 
+    debug(this.debugClientId, 'breaking client', {
+      error,
+      activeAlreadyFinalized,
+      queued: this.pumpState.queue.length,
+    });
     this.pumpState.broken = true;
     this.pumpState.releaseError = error;
 
@@ -533,12 +586,14 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
   }
 
   private notifyStateChange(): void {
+    const snapshot = this.queueSnapshot();
+    debug(this.debugClientId, 'queue state changed', snapshot);
+
     const listener = this.options.onQueueStateChange;
     if (listener === undefined) {
       return;
     }
 
-    const snapshot = this.queueSnapshot();
     if (
       this.lastNotifiedSnapshot !== undefined &&
       this.lastNotifiedSnapshot.queued === snapshot.queued &&
@@ -556,6 +611,45 @@ export class WrappedPoolClientImpl extends EventEmitter implements WrappedPoolCl
       this.deferCallbackThrow(error);
     }
   }
+
+  private debugQueueingQuery(
+    kind: QueueItem['kind'],
+    description: string | undefined,
+    args: unknown[],
+  ): void {
+    if (debug.enabled) {
+      debug(this.debugClientId, 'query queued', {
+        kind,
+        description,
+        args: [...args],
+        queueSize: this.pumpState.queue.length + 1,
+      });
+    }
+  }
+
+  private debugRunningQuery(
+    kind: QueueItem['kind'],
+    description: string | undefined,
+    args: unknown[],
+    submittedArgs?: unknown[],
+  ): void {
+    debug(this.debugClientId, 'query running', {
+      kind,
+      description,
+      args,
+      submittedArgs,
+    });
+  }
+
+  private clientDebugContext(): Record<string, unknown> {
+    return {
+      processID: this.processID,
+      database: this.database,
+      host: this.host,
+      port: this.port,
+      user: this.user,
+    };
+  }
 }
 
 export function wrapClient(
@@ -563,4 +657,12 @@ export function wrapClient(
   options: WrappedPoolOptions = {},
 ): WrappedPoolClient {
   return new WrappedPoolClientImpl(rawClient, options);
+}
+
+export function getWrappedClientDebugId(client: WrappedPoolClient): number | undefined {
+  if (client instanceof WrappedPoolClientImpl) {
+    return client.debugClientId;
+  }
+
+  return undefined;
 }

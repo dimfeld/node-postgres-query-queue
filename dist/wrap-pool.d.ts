@@ -32,6 +32,7 @@ export declare class WrappedPoolImpl implements WrappedPool {
     get ended(): boolean;
     get options(): Pool['options'];
     set options(options: Pool['options']);
+    private poolDebugContext;
 }
 export declare function wrapPool(pool: Pool, options?: WrappedPoolOptions): WrappedPool;
 //# sourceMappingURL=wrap-pool.d.ts.map

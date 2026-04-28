@@ -1,9 +1,11 @@
+import createDebug from 'debug';
 import type { Pool } from 'pg';
-import { wrapClient } from './wrap-client.js';
+import { getWrappedClientDebugId, wrapClient } from './wrap-client.js';
 import type { WrappedPool, WrappedPoolOptions } from './types.js';
 
 const CONNECT_CALLBACK_UNSUPPORTED_MESSAGE =
   'connect(callback) is not supported by the wrapped pool; use the promise form';
+const debug = createDebug('node-postgres-query-queue:pool');
 
 export class WrappedPoolImpl implements WrappedPool {
   private readonly inner: Pool;
@@ -19,15 +21,20 @@ export class WrappedPoolImpl implements WrappedPool {
       throw new Error(CONNECT_CALLBACK_UNSUPPORTED_MESSAGE);
     }
 
+    debug('client acquire requested', this.poolDebugContext());
     const rawClient = await this.inner.connect();
-    return wrapClient(rawClient, this.wrapperOptions);
+    const client = wrapClient(rawClient, this.wrapperOptions);
+    debug(getWrappedClientDebugId(client), 'client acquired', this.poolDebugContext());
+    return client;
   }
 
   query: Pool['query'] = ((...args: unknown[]) => {
+    debug('pool query', this.poolDebugContext());
     return (this.inner.query as (...queryArgs: unknown[]) => unknown)(...args);
   }) as Pool['query'];
 
   end: Pool['end'] = ((...args: unknown[]) => {
+    debug('pool end requested', this.poolDebugContext());
     return (this.inner.end as (...endArgs: unknown[]) => unknown)(...args);
   }) as Pool['end'];
 
@@ -154,6 +161,17 @@ export class WrappedPoolImpl implements WrappedPool {
 
   set options(options: Pool['options']) {
     this.inner.options = options;
+  }
+
+  private poolDebugContext(): Record<string, number | boolean> {
+    return {
+      totalCount: this.inner.totalCount,
+      idleCount: this.inner.idleCount,
+      waitingCount: this.inner.waitingCount,
+      expiredCount: this.inner.expiredCount,
+      ending: this.inner.ending,
+      ended: this.inner.ended,
+    };
   }
 }
 

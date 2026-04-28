@@ -27,7 +27,11 @@
     "test:watch": "vitest --passWithNoTests",
     "test:integration": "vitest run --project integration --passWithNoTests"
   },
+  "dependencies": {
+    "debug": "^4.4.3"
+  },
   "devDependencies": {
+    "@types/debug": "^4.1.13",
     "@types/node": "^22.15.21",
     "@types/pg": "^8.15.2",
     "@types/pg-cursor": "^2.7.2",
