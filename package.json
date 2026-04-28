@@ -2,28 +2,44 @@
   "name": "node-postgres-query-queue",
   "version": "1.0.0",
   "description": "",
+  "keywords": [
+    "pg",
+    "postgres"
+  ],
+  "license": "Apache-2.0",
+  "author": "Daniel Imfeld <dimfeld>",
+  "type": "module",
   "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc",
-    "check": "tsc --noEmit",
+    "prepack": "pnpm build",
+    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "format": "oxfmt",
     "lint": "oxlint",
     "dev": "tsc -w",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [
-    "postgres",
-    "pg"
-  ],
-  "author": "Daniel Imfeld <dimfeld>",
-  "license": "Apache-2.0",
-  "packageManager": "pnpm@10.33.0",
-  "dependencies": {
-    "pg": "^8 || ^9"
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest --passWithNoTests",
+    "test:integration": "vitest run --project integration --passWithNoTests"
   },
   "devDependencies": {
+    "@types/node": "^22.15.21",
+    "@types/pg": "^8.15.2",
+    "@types/pg-cursor": "^2.7.2",
     "oxfmt": "^0.46.0",
     "oxlint": "^1.61.0",
-    "typescript": "^6.0.3"
-  }
+    "pg": "^8.13.3",
+    "pg-cursor": "^2.15.3",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "pg": "^8 || ^9"
+  },
+  "packageManager": "pnpm@10.33.0"
 }
